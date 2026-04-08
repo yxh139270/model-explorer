@@ -31,6 +31,7 @@ from .utils import convert_adapter_response
 
 class ExtensionManager(object, metaclass=Singleton):
   BUILTIN_ADAPTER_MODULES: list[str] = [
+      '.custom_dialect_adapter',
       '.builtin_tflite_flatbuffer_adapter',
       '.builtin_tflite_mlir_adapter',
       '.builtin_tf_mlir_adapter',

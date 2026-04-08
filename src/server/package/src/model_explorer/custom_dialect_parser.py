@@ -184,6 +184,33 @@ def _parse_operation(statement: str) -> ParsedOperation:
   )
 
 
+def _find_top_level_block_headers(region_body: str) -> list[tuple[int, int, str]]:
+  headers: list[tuple[int, int, str]] = []
+  delimiters = {'(': ')', '[': ']', '{': '}', '<': '>'}
+  stack: list[str] = []
+  index = 0
+  while index < len(region_body):
+    ch = region_body[index]
+    if ch in delimiters:
+      stack.append(delimiters[ch])
+    elif stack and ch == stack[-1]:
+      stack.pop()
+    elif not stack and region_body.startswith('^bb', index):
+      lparen = region_body.find('(', index)
+      if lparen == -1:
+        colon = region_body.find(':', index)
+      else:
+        rparen = _find_matching_paren(region_body, lparen)
+        colon = region_body.find(':', rparen)
+      if colon == -1:
+        break
+      header = region_body[index:colon + 1].strip()
+      headers.append((index, colon + 1, header))
+      index = colon
+    index += 1
+  return headers
+
+
 def _parse_region(region_text: str) -> ParsedRegion:
   region_text = region_text.strip()
   if not region_text.startswith('{'):
@@ -191,16 +218,14 @@ def _parse_region(region_text: str) -> ParsedRegion:
   end = find_matching_brace(region_text, 0)
   region_body = region_text[1:end].strip()
 
-  block_matches = list(re.finditer(r'(?m)^\s*(\^bb[^\n]*:)', region_body))
-  if not block_matches:
+  block_headers = _find_top_level_block_headers(region_body)
+  if not block_headers:
     return ParsedRegion(blocks=[_parse_block(region_body)])
 
   blocks: list[ParsedBlock] = []
-  for index, match in enumerate(block_matches):
-    block_header = match.group(1)
-    start = match.end()
-    end = block_matches[index + 1].start() if index + 1 < len(block_matches) else len(region_body)
-    block_body = region_body[start:end]
+  for index, (_, header_end, block_header) in enumerate(block_headers):
+    next_start = block_headers[index + 1][0] if index + 1 < len(block_headers) else len(region_body)
+    block_body = region_body[header_end:next_start]
     blocks.append(
         ParsedBlock(
             arguments=_parse_block_arguments(block_header),
@@ -220,6 +245,26 @@ def _parse_block(body_text: str) -> ParsedBlock:
   return ParsedBlock(operations=operations)
 
 
+def _find_function_body_start(text: str, search_start: int) -> int:
+  index = search_start
+  delimiters = {'(': ')', '[': ']', '{': '}', '<': '>'}
+  stack: list[str] = []
+  while index < len(text):
+    ch = text[index]
+    if ch == '{' and not stack:
+      brace_end = find_matching_brace(text, index)
+      tail = text[brace_end + 1:].lstrip()
+      if not tail or tail.startswith('func.func'):
+        return index
+      stack.append('}')
+    elif ch in delimiters:
+      stack.append(delimiters[ch])
+    elif stack and ch == stack[-1]:
+      stack.pop()
+    index += 1
+  raise ValueError('function body not found')
+
+
 def _parse_function(text: str, start_index: int) -> tuple[ParsedFunction, int]:
   name_match = re.match(r'func\.func\s+@([A-Za-z0-9_.$-]+)\s*\(', text[start_index:])
   if not name_match:
@@ -230,10 +275,7 @@ def _parse_function(text: str, start_index: int) -> tuple[ParsedFunction, int]:
   args_text = text[args_start + 1:args_end]
   arguments = _parse_arguments(args_text)
 
-  body_start = _find_top_level_token(text[args_end + 1:], '{')
-  if body_start == -1:
-    raise ValueError('function body not found')
-  body_start = args_end + 1 + body_start
+  body_start = _find_function_body_start(text, args_end + 1)
   body_end = find_matching_brace(text, body_start)
 
   signature_tail = text[args_end + 1:body_start].strip()
