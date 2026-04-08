@@ -167,3 +167,6 @@ cython_debug/
 # Bazel
 /bazel-*
 MODULE.bazel.lock
+
+# Local git worktrees
+/.worktrees/
