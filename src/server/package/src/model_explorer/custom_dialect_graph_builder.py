@@ -3,7 +3,12 @@ from __future__ import annotations
 import re
 
 from model_explorer import graph_builder
-from model_explorer.custom_dialect_ir import ParsedBlock, ParsedModule, ParsedOperation
+from model_explorer.custom_dialect_ir import (
+    ParsedBlock,
+    ParsedModule,
+    ParsedOperation,
+    ParsedRegion,
+)
 from model_explorer.custom_dialect_tokenizer import split_top_level
 
 
@@ -54,6 +59,19 @@ def _attrs_for_operation(op: ParsedOperation) -> list[graph_builder.KeyValue]:
   return attrs
 
 
+def _group_attrs_for_operation(op: ParsedOperation) -> dict[str, str]:
+  attrs: dict[str, str] = {
+      'op_type': op.name,
+      'raw_attributes': op.attributes_text,
+      'result_types': ', '.join(result.raw_text for result in op.result_types),
+  }
+  memory_spaces = [result.memory_space for result in op.result_types if result.memory_space]
+  if memory_spaces:
+    attrs['memory_space'] = ' | '.join(sorted(set(memory_spaces)))
+  attrs.update(op.attributes)
+  return attrs
+
+
 def _outputs_metadata_for_operation(
     op: ParsedOperation,
 ) -> list[graph_builder.MetadataItem]:
@@ -64,6 +82,34 @@ def _outputs_metadata_for_operation(
       attrs.append(graph_builder.KeyValue(key='shape', value='x'.join(result.shape)))
     outputs.append(graph_builder.MetadataItem(id=str(index), attrs=attrs))
   return outputs
+
+
+def _is_return_operation(op_name: str) -> bool:
+  return op_name == 'return' or op_name.endswith('.return')
+
+
+def _extract_return_operands(op: ParsedOperation) -> list[str]:
+  operands = _extract_operands(op.operand_text)
+  if operands:
+    return operands
+
+  # `return` is often written as `dlgpu.return %x : type` (without parens),
+  # where parser stores `%x : type` in `type_text`.
+  if ':' in op.type_text:
+    head = op.type_text.split(':', 1)[0].strip()
+  else:
+    head = op.type_text.strip()
+  if not head:
+    return []
+  return [item for item in _extract_operands(head) if item.startswith('%')]
+
+
+def _find_region_return_operands(region: ParsedRegion) -> list[str]:
+  for block in region.blocks:
+    for candidate in reversed(block.operations):
+      if _is_return_operation(candidate.name):
+        return _extract_return_operands(candidate)
+  return []
 
 
 def build_graph(module: ParsedModule) -> graph_builder.Graph:
@@ -109,15 +155,73 @@ def build_graph(module: ParsedModule) -> graph_builder.Graph:
           )
       )
 
-  def walk_block(block: ParsedBlock, namespace: str):
+  def resolve_operand_source(
+      operand: str, namespace: str
+  ) -> tuple[str, str]:
+    if operand in producer_map:
+      return producer_map[operand]
+    source_id = ensure_argument_node(operand, namespace, is_function_arg=False)
+    return source_id, '0'
+
+  def walk_block(
+      block: ParsedBlock,
+      namespace: str,
+      block_arg_bindings: dict[str, tuple[str, str]] | None = None,
+  ):
     nonlocal node_counter
     for block_arg in block.arguments:
-      arg_node_id = ensure_argument_node(
-          block_arg.name, namespace, is_function_arg=False
-      )
-      producer_map[block_arg.name] = (arg_node_id, '0')
+      if block_arg_bindings and block_arg.name in block_arg_bindings:
+        producer_map[block_arg.name] = block_arg_bindings[block_arg.name]
+      else:
+        arg_node_id = ensure_argument_node(
+            block_arg.name, namespace, is_function_arg=False
+        )
+        producer_map[block_arg.name] = (arg_node_id, '0')
 
     for op in block.operations:
+      if _is_return_operation(op.name):
+        continue
+
+      if op.regions:
+        region_name = (
+            op.attributes.get('sym_name')
+            or op.attributes.get('opName')
+            or f'sub_{node_counter}'
+        )
+        child_namespace = f'{namespace}/{region_name}' if namespace else region_name
+
+        if graph.groupNodeAttributes is None:
+          graph.groupNodeAttributes = {}
+        graph.groupNodeAttributes[child_namespace] = _group_attrs_for_operation(op)
+
+        operand_sources = [
+            resolve_operand_source(operand, namespace)
+            for operand in _extract_operands(op.operand_text)
+        ]
+
+        for region in op.regions:
+          for block_in_region in region.blocks:
+            block_bindings: dict[str, tuple[str, str]] = {}
+            for index, block_arg in enumerate(block_in_region.arguments):
+              if index < len(operand_sources):
+                block_bindings[block_arg.name] = operand_sources[index]
+            walk_block(block_in_region, child_namespace, block_bindings)
+
+        return_operands: list[str] = []
+        for region in op.regions:
+          return_operands = _find_region_return_operands(region)
+          if return_operands:
+            break
+
+        for output_index, result_name in enumerate(op.result_names):
+          if output_index < len(return_operands):
+            producer_map[result_name] = resolve_operand_source(
+                return_operands[output_index], child_namespace
+            )
+          elif output_index < len(operand_sources):
+            producer_map[result_name] = operand_sources[output_index]
+        continue
+
       node_id = f'op_{node_counter}_{_sanitize_id(op.name or "op")}'
       node_counter += 1
 
@@ -133,16 +237,6 @@ def build_graph(module: ParsedModule) -> graph_builder.Graph:
 
       for output_index, result_name in enumerate(op.result_names):
         producer_map[result_name] = (node_id, str(output_index))
-
-      for region_index, region in enumerate(op.regions):
-        region_name = (
-            op.attributes.get('sym_name')
-            or op.attributes.get('opName')
-            or f'sub_{region_index}'
-        )
-        child_namespace = f'{namespace}/{region_name}' if namespace else region_name
-        for block_in_region in region.blocks:
-          walk_block(block_in_region, child_namespace)
 
   for func in module.functions:
     namespace = func.name

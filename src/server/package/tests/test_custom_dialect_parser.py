@@ -61,6 +61,28 @@ class CustomDialectParserTest(unittest.TestCase):
     self.assertEqual(op.attributes['cluster'], '0')
     self.assertIn('DdrConstPublic', op.result_types[0].memory_space)
 
+  def test_block_argument_with_affine_map_and_memory_space_stays_single_arg(self):
+    text = (
+        'func.func @main(%arg0: memref<1xf32, #dlgpu<memory_space cluster = '
+        '0>>) {\n'
+        '  %0 = dlgpu.launch_gtg(%arg0) {sym_name = "sub_0"} : '
+        'memref<1xf32, #dlgpu<memory_space cluster = 0>> -> '
+        'memref<1xf32, #dlgpu<memory_space cluster = 0>> {\n'
+        '  ^bb0(%arg1: memref<1x3x540x360xf32, affine_map<(d0, d1, d2, d3) '
+        '-> (d0 * 588612 + d1 * 196204 + d2 * 362 + d3)>, '
+        '#dlgpu<memory_space cluster = 0, memLoc = {type: DdrCuda, c: 0}>>):\n'
+        '    dlgpu.return %arg1 : memref<1xf32, #dlgpu<memory_space cluster '
+        '= 0>>\n'
+        '  }\n'
+        '}'
+    )
+
+    module = parse_mlir_text(text)
+    nested = module.functions[0].body.operations[0].regions[0].blocks[0]
+    self.assertEqual(len(nested.arguments), 1)
+    self.assertEqual(nested.arguments[0].name, '%arg1')
+    self.assertIn('#dlgpu<memory_space', nested.arguments[0].type_text)
+
   def test_fallback_keeps_raw_attribute_text(self):
     text = (
         'func.func @main() { %0 = custom.foo {opaque = '
