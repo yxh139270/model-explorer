@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from model_explorer.custom_dialect_handlers import extract_operation_metadata
 from model_explorer.custom_dialect_ir import (
     ParsedBlock,
     ParsedFunction,
@@ -11,6 +12,7 @@ from model_explorer.custom_dialect_ir import (
     ParsedValue,
 )
 from model_explorer.custom_dialect_tokenizer import find_matching_brace, split_top_level
+from model_explorer.custom_dialect_types import parse_type
 
 
 def _find_matching_paren(text: str, start_index: int) -> int:
@@ -96,6 +98,18 @@ def _parse_block_arguments(block_header: str) -> list[ParsedValue]:
   return _parse_arguments(block_header[lparen + 1:rparen])
 
 
+def _parse_output_types(type_text: str):
+  text = type_text.strip()
+  if not text:
+    return []
+  arrow = _find_top_level_token(text, '->')
+  output_text = text[arrow + 2:].strip() if arrow != -1 else text
+  if output_text.startswith('(') and output_text.endswith(')'):
+    output_text = output_text[1:-1].strip()
+  outputs = split_top_level(output_text, ',') if output_text else []
+  return [parse_type(output) for output in outputs if output.strip()]
+
+
 def _parse_operation(statement: str) -> ParsedOperation:
   line = statement.strip()
   result_names: list[str] = []
@@ -117,19 +131,21 @@ def _parse_operation(statement: str) -> ParsedOperation:
         result_count = 1
       line = rhs.strip()
 
-  paren_index = line.find('(')
-  if paren_index == -1:
-    op_name = line.split(' ', 1)[0].strip()
+  name_match = re.match(r'^([^\s({]+)', line)
+  if not name_match:
     return ParsedOperation(
-        name=op_name,
+        name='',
         result_names=result_names,
         result_count=result_count,
     )
+  op_name = name_match.group(1)
+  remainder = line[name_match.end():].strip()
 
-  op_name = line[:paren_index].strip()
-  operand_end = _find_matching_paren(line, paren_index)
-  operand_text = line[paren_index + 1:operand_end].strip()
-  remainder = line[operand_end + 1:].strip()
+  operand_text = ''
+  if remainder.startswith('('):
+    operand_end = _find_matching_paren(remainder, 0)
+    operand_text = remainder[1:operand_end].strip()
+    remainder = remainder[operand_end + 1:].strip()
 
   attributes_text = ''
   if remainder.startswith('{'):
@@ -152,6 +168,9 @@ def _parse_operation(statement: str) -> ParsedOperation:
     region = _parse_region(region_text)
     regions.append(region)
 
+  metadata = extract_operation_metadata(op_name, attributes_text)
+  result_types = _parse_output_types(type_text)
+
   return ParsedOperation(
       name=op_name,
       result_names=result_names,
@@ -160,6 +179,8 @@ def _parse_operation(statement: str) -> ParsedOperation:
       type_text=type_text,
       operand_text=operand_text,
       regions=regions,
+      attributes=metadata,
+      result_types=result_types,
   )
 
 

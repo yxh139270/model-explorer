@@ -43,6 +43,33 @@ class CustomDialectParserTest(unittest.TestCase):
     nested = module.functions[0].body.operations[1].regions[0].blocks[0]
     self.assertEqual(nested.arguments[0].name, '%arg1')
 
+  def test_extract_dlgpu_attributes(self):
+    text = (
+        'func.func @main(%arg0: memref<1x3x1920x1920xf32, '
+        '#dlgpu<memory_space cluster = 0, memLoc = {type: DdrCuda, cluster: '
+        '0}, dynInfo = {dynDims: [false, false, true, true], minShape: [1, '
+        '3, 180, 1280]}>>) {\n'
+        '  %0 = dlgpu.load {cluster = 0 : si32, opName = '
+        '"Conv0_filter_per_channel_t0", size = 384 : i64} : '
+        'memref<384xui8, #dlgpu<memory_space cluster = 0, memLoc = {type: '
+        'DdrConstPublic, cluster: 0}>>\n'
+        '}'
+    )
+    module = parse_mlir_text(text)
+    op = module.functions[0].body.operations[0]
+    self.assertEqual(op.attributes['opName'], 'Conv0_filter_per_channel_t0')
+    self.assertEqual(op.attributes['cluster'], '0')
+    self.assertIn('DdrConstPublic', op.result_types[0].memory_space)
+
+  def test_fallback_keeps_raw_attribute_text(self):
+    text = (
+        'func.func @main() { %0 = custom.foo {opaque = '
+        '#relay<binding_attr {"x": 1}>} : () -> i32 }'
+    )
+    module = parse_mlir_text(text)
+    op = module.functions[0].body.operations[0]
+    self.assertIn('#relay<binding_attr', op.attributes_text)
+
 
 if __name__ == '__main__':
   unittest.main()
