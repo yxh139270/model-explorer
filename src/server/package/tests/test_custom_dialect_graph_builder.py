@@ -72,6 +72,8 @@ class CustomDialectGraphBuilderTest(unittest.TestCase):
     self.assertEqual(group_attrs['op_type'], 'dlgpu.launch_gtg')
     self.assertEqual(group_attrs['sym_name'], 'sub_0_infer_shape')
     self.assertEqual(group_attrs['opName'], 'LaunchInfer')
+    self.assertEqual(group_attrs['input_0_shape'], '1')
+    self.assertEqual(group_attrs['output_0_shape'], '1')
 
     # No duplicate launch node with the same label as the expandable group.
     self.assertFalse(any(node.label == 'sub_0_infer_shape' for node in graph.nodes))

@@ -50,6 +50,7 @@ class ExtensionManager(object, metaclass=Singleton):
       import ai_edge_model_explorer_adapter
     except ImportError:
       ExtensionManager.BUILTIN_ADAPTER_MODULES = [
+          '.custom_dialect_adapter',
           '.builtin_pytorch_exportedprogram_adapter',
       ]
 

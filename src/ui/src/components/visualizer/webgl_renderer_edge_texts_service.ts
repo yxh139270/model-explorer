@@ -23,7 +23,7 @@ import {AppService} from './app_service';
 import {DEFAULT_EDGE_LABEL_FONT_SIZE} from './common/consts';
 import {ModelEdge} from './common/model_graph';
 import {FontWeight} from './common/types';
-import {getNodeAttrStringValue, isOpNode} from './common/utils';
+import {getNodeAttrStringValue, isGroupNode, isOpNode} from './common/utils';
 import {ThreejsService} from './threejs_service';
 import {ColorVariable} from './visualizer_theme_service';
 import {WebglRenderer} from './webgl_renderer';
@@ -102,10 +102,6 @@ export class WebglRendererEdgeTextsService {
         this.webglRenderer.curModelGraph.nodesById[edge.fromNodeId];
       const toNode = this.webglRenderer.curModelGraph.nodesById[edge.toNodeId];
 
-      if (!isOpNode(fromNode) || !isOpNode(toNode)) {
-        continue;
-      }
-
       // Find the edge label.
       let edgeLabel = '?';
       if (edge.label != null) {
@@ -114,50 +110,74 @@ export class WebglRendererEdgeTextsService {
           continue;
         }
       } else if (outputMetadataKey != null) {
-        const outputsMetadata = fromNode.outputsMetadata || {};
-        for (const outputId of Object.keys(outputsMetadata)) {
-          const outgoingEdge = (fromNode.outgoingEdges || []).find(
-            (curEdge) =>
-              curEdge.sourceNodeOutputId === outputId &&
-              curEdge.targetNodeId === edge.toNodeId,
-          );
-          if (outgoingEdge != null) {
-            edgeLabel = outputsMetadata[outputId][outputMetadataKey] || '?';
-            edgeLabel = edgeLabel
-              .split('')
-              .map((char) => {
-                if (char === 'x') {
-                  char = 'x';
-                }
-                if (char === '∗') {
-                  char = '*';
-                }
-                if (char === '') {
-                  char = '';
-                }
-                return charsInfo[char] == null ? '?' : char;
-              })
-              .join('');
-            break;
+        if (isOpNode(fromNode)) {
+          const outputsMetadata = fromNode.outputsMetadata || {};
+          for (const outputId of Object.keys(outputsMetadata)) {
+            const outgoingEdge = (fromNode.outgoingEdges || []).find(
+              (curEdge) =>
+                curEdge.sourceNodeOutputId === outputId &&
+                curEdge.targetNodeId === edge.toNodeId,
+            );
+            if (outgoingEdge != null) {
+              edgeLabel = outputsMetadata[outputId][outputMetadataKey] || '?';
+              break;
+            }
           }
         }
-      } else if (inputMetadataKey != null) {
-        const inputsMetadata = toNode.inputsMetadata || {};
-        for (const inputId of Object.keys(inputsMetadata)) {
-          const incomingEdge = (toNode.incomingEdges || []).find(
-            (curEdge) =>
-              curEdge.sourceNodeId === edge.fromNodeId &&
-              curEdge.targetNodeInputId === inputId,
+
+        // Fallback for collapsed namespace edges where one endpoint is group
+        // node. Group tensor metadata is stored in groupNodeAttributes.
+        if ((edgeLabel === '?' || edgeLabel === '') && isGroupNode(toNode)) {
+          edgeLabel = this.getGroupTensorMetadata(toNode.id, 'input', outputMetadataKey);
+        }
+        if ((edgeLabel === '?' || edgeLabel === '') && isGroupNode(fromNode)) {
+          edgeLabel = this.getGroupTensorMetadata(
+            fromNode.id,
+            'output',
+            outputMetadataKey,
           );
-          if (incomingEdge != null) {
-            edgeLabel = inputsMetadata[inputId][inputMetadataKey] || '?';
-            break;
+        }
+
+        edgeLabel = edgeLabel
+          .split('')
+          .map((char) => {
+            if (char === 'x') {
+              char = 'x';
+            }
+            if (char === '∗') {
+              char = '*';
+            }
+            if (char === '') {
+              char = '';
+            }
+            return charsInfo[char] == null ? '?' : char;
+          })
+          .join('');
+      } else if (inputMetadataKey != null) {
+        if (isOpNode(toNode)) {
+          const inputsMetadata = toNode.inputsMetadata || {};
+          for (const inputId of Object.keys(inputsMetadata)) {
+            const incomingEdge = (toNode.incomingEdges || []).find(
+              (curEdge) =>
+                curEdge.sourceNodeId === edge.fromNodeId &&
+                curEdge.targetNodeInputId === inputId,
+            );
+            if (incomingEdge != null) {
+              edgeLabel = inputsMetadata[inputId][inputMetadataKey] || '?';
+              break;
+            }
           }
+        } else if (isGroupNode(toNode)) {
+          edgeLabel = this.getGroupTensorMetadata(toNode.id, 'input', inputMetadataKey);
         }
       } else if (sourceNodeAttrKey != null) {
-        edgeLabel = getNodeAttrStringValue(fromNode, sourceNodeAttrKey) || '?';
+        edgeLabel = isOpNode(fromNode)
+          ? getNodeAttrStringValue(fromNode, sourceNodeAttrKey) || '?'
+          : '?';
       } else if (targetNodeAttrKey != null) {
-        edgeLabel = getNodeAttrStringValue(toNode, targetNodeAttrKey) || '?';
+        edgeLabel = isOpNode(toNode)
+          ? getNodeAttrStringValue(toNode, targetNodeAttrKey) || '?'
+          : '?';
       }
 
       // Trim the edge label.
@@ -431,5 +451,34 @@ export class WebglRendererEdgeTextsService {
 
   updateAnimationProgress(t: number) {
     this.edgeTexts.updateAnimationProgress(t);
+  }
+
+  private getGroupTensorMetadata(
+    groupNodeId: string,
+    ioType: 'input' | 'output',
+    metadataKey: string,
+  ): string {
+    const namespace = groupNodeId.replace('___group___', '');
+    const attrs =
+      this.webglRenderer.curModelGraph.groupNodeAttributes?.[namespace] || {};
+    const prefix = `${ioType}_`;
+    const suffix = `_${metadataKey}`;
+    const values = Object.keys(attrs)
+      .filter((key) => key.startsWith(prefix) && key.endsWith(suffix))
+      .sort((a, b) => {
+        const idxA = Number(a.slice(prefix.length, a.length - suffix.length));
+        const idxB = Number(b.slice(prefix.length, b.length - suffix.length));
+        return idxA - idxB;
+      })
+      .map((key) => attrs[key])
+      .filter((value) => value != null && value !== '');
+
+    if (values.length === 0) {
+      return '?';
+    }
+    if (values.length === 1) {
+      return values[0];
+    }
+    return values.join(' | ');
   }
 }

@@ -10,6 +10,7 @@ from model_explorer.custom_dialect_ir import (
     ParsedRegion,
 )
 from model_explorer.custom_dialect_tokenizer import split_top_level
+from model_explorer.custom_dialect_types import ParsedType, parse_type
 
 
 def _sanitize_id(text: str) -> str:
@@ -60,16 +61,66 @@ def _attrs_for_operation(op: ParsedOperation) -> list[graph_builder.KeyValue]:
 
 
 def _group_attrs_for_operation(op: ParsedOperation) -> dict[str, str]:
+  input_types = _input_types_for_operation(op)
   attrs: dict[str, str] = {
       'op_type': op.name,
       'raw_attributes': op.attributes_text,
       'result_types': ', '.join(result.raw_text for result in op.result_types),
+      'input_count': str(len(input_types)),
+      'output_count': str(len(op.result_types)),
   }
+
+  for index, input_type in enumerate(input_types):
+    attrs[f'input_{index}_type'] = input_type.raw_text
+    if input_type.shape:
+      attrs[f'input_{index}_shape'] = 'x'.join(input_type.shape)
+
+  for index, output_type in enumerate(op.result_types):
+    attrs[f'output_{index}_type'] = output_type.raw_text
+    if output_type.shape:
+      attrs[f'output_{index}_shape'] = 'x'.join(output_type.shape)
+
   memory_spaces = [result.memory_space for result in op.result_types if result.memory_space]
   if memory_spaces:
     attrs['memory_space'] = ' | '.join(sorted(set(memory_spaces)))
   attrs.update(op.attributes)
   return attrs
+
+
+def _find_top_level_arrow(text: str) -> int:
+  stack: list[str] = []
+  delimiters = {'(': ')', '[': ']', '{': '}', '<': '>'}
+  index = 0
+  while index < len(text):
+    ch = text[index]
+    if ch in delimiters:
+      stack.append(delimiters[ch])
+    elif stack and ch == stack[-1]:
+      stack.pop()
+    elif not stack and text.startswith('->', index):
+      return index
+    index += 1
+  return -1
+
+
+def _input_types_for_operation(op: ParsedOperation) -> list[ParsedType]:
+  type_text = op.type_text.strip()
+  if not type_text:
+    return []
+
+  arrow_index = _find_top_level_arrow(type_text)
+  input_text = type_text[:arrow_index].strip() if arrow_index != -1 else type_text
+  if input_text.startswith('(') and input_text.endswith(')'):
+    input_text = input_text[1:-1].strip()
+
+  if not input_text:
+    return []
+
+  return [
+      parse_type(candidate)
+      for candidate in split_top_level(input_text, ',')
+      if candidate.strip()
+  ]
 
 
 def _outputs_metadata_for_operation(

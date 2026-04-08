@@ -22,7 +22,12 @@ import * as three from 'three';
 
 import {WEBGL_ELEMENT_Y_FACTOR} from './common/consts';
 import {GroupNode, ModelEdge, ModelNode, OpNode} from './common/model_graph';
-import {FontWeight, LayoutDirection, Point} from './common/types';
+import {
+  FontWeight,
+  LayoutDirection,
+  Point,
+  ShowOnEdgeItemType,
+} from './common/types';
 import {
   findCommonNamespace,
   generateCurvePoints,
@@ -190,10 +195,12 @@ export class WebglRendererIoHighlightService {
         this.webglRenderer.curShowOnEdgeItem,
       );
       if (
-        outputMetadataKey != null ||
-        inputMetadataKey != null ||
-        sourceNodeAttrKey != null ||
-        targetNodeAttrKey != null
+        this.webglRenderer.curShowOnEdgeItem?.type !==
+          ShowOnEdgeItemType.TENSOR_SHAPE &&
+        (outputMetadataKey != null ||
+          inputMetadataKey != null ||
+          sourceNodeAttrKey != null ||
+          targetNodeAttrKey != null)
       ) {
         const labels =
           this.webglRenderer.webglRendererEdgeTextsService.genLabelsOnEdges(
@@ -308,10 +315,12 @@ export class WebglRendererIoHighlightService {
         this.webglRenderer.curShowOnEdgeItem,
       );
       if (
-        outputMetadataKey != null ||
-        inputMetadataKey != null ||
-        sourceNodeAttrKey != null ||
-        targetNodeAttrKey != null
+        this.webglRenderer.curShowOnEdgeItem?.type !==
+          ShowOnEdgeItemType.TENSOR_SHAPE &&
+        (outputMetadataKey != null ||
+          inputMetadataKey != null ||
+          sourceNodeAttrKey != null ||
+          targetNodeAttrKey != null)
       ) {
         const labels =
           this.webglRenderer.webglRendererEdgeTextsService.genLabelsOnEdges(
