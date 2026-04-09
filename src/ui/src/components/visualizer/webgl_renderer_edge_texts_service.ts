@@ -97,6 +97,8 @@ export class WebglRendererEdgeTextsService {
       ),
     );
     const charsInfo = this.threejsService.getCharsInfo(FontWeight.MEDIUM);
+    const sanitizedLabelCache = new Map<string, string>();
+    const groupTensorMetadataCache = new Map<string, string>();
     for (const {edge} of edges) {
       const fromNode =
         this.webglRenderer.curModelGraph.nodesById[edge.fromNodeId];
@@ -112,63 +114,53 @@ export class WebglRendererEdgeTextsService {
       } else if (outputMetadataKey != null) {
         if (isOpNode(fromNode)) {
           const outputsMetadata = fromNode.outputsMetadata || {};
-          for (const outputId of Object.keys(outputsMetadata)) {
-            const outgoingEdge = (fromNode.outgoingEdges || []).find(
-              (curEdge) =>
-                curEdge.sourceNodeOutputId === outputId &&
-                curEdge.targetNodeId === edge.toNodeId,
-            );
-            if (outgoingEdge != null) {
-              edgeLabel = outputsMetadata[outputId][outputMetadataKey] || '?';
-              break;
-            }
+          const outgoingEdge = (fromNode.outgoingEdges || []).find(
+            (curEdge) => curEdge.targetNodeId === edge.toNodeId,
+          );
+          if (outgoingEdge?.sourceNodeOutputId != null) {
+            edgeLabel =
+              outputsMetadata[outgoingEdge.sourceNodeOutputId]?.[
+                outputMetadataKey
+              ] || '?';
           }
         }
 
         // Fallback for collapsed namespace edges where one endpoint is group
         // node. Group tensor metadata is stored in groupNodeAttributes.
         if ((edgeLabel === '?' || edgeLabel === '') && isGroupNode(toNode)) {
-          edgeLabel = this.getGroupTensorMetadata(toNode.id, 'input', outputMetadataKey);
+          edgeLabel = this.getGroupTensorMetadata(
+            toNode.id,
+            'input',
+            outputMetadataKey,
+            groupTensorMetadataCache,
+          );
         }
         if ((edgeLabel === '?' || edgeLabel === '') && isGroupNode(fromNode)) {
           edgeLabel = this.getGroupTensorMetadata(
             fromNode.id,
             'output',
             outputMetadataKey,
+            groupTensorMetadataCache,
           );
         }
-
-        edgeLabel = edgeLabel
-          .split('')
-          .map((char) => {
-            if (char === 'x') {
-              char = 'x';
-            }
-            if (char === '∗') {
-              char = '*';
-            }
-            if (char === '') {
-              char = '';
-            }
-            return charsInfo[char] == null ? '?' : char;
-          })
-          .join('');
       } else if (inputMetadataKey != null) {
         if (isOpNode(toNode)) {
           const inputsMetadata = toNode.inputsMetadata || {};
-          for (const inputId of Object.keys(inputsMetadata)) {
-            const incomingEdge = (toNode.incomingEdges || []).find(
-              (curEdge) =>
-                curEdge.sourceNodeId === edge.fromNodeId &&
-                curEdge.targetNodeInputId === inputId,
-            );
-            if (incomingEdge != null) {
-              edgeLabel = inputsMetadata[inputId][inputMetadataKey] || '?';
-              break;
-            }
+          const incomingEdge = (toNode.incomingEdges || []).find(
+            (curEdge) => curEdge.sourceNodeId === edge.fromNodeId,
+          );
+          if (incomingEdge?.targetNodeInputId != null) {
+            edgeLabel =
+              inputsMetadata[incomingEdge.targetNodeInputId]?.[inputMetadataKey] ||
+              '?';
           }
         } else if (isGroupNode(toNode)) {
-          edgeLabel = this.getGroupTensorMetadata(toNode.id, 'input', inputMetadataKey);
+          edgeLabel = this.getGroupTensorMetadata(
+            toNode.id,
+            'input',
+            inputMetadataKey,
+            groupTensorMetadataCache,
+          );
         }
       } else if (sourceNodeAttrKey != null) {
         edgeLabel = isOpNode(fromNode)
@@ -179,6 +171,12 @@ export class WebglRendererEdgeTextsService {
           ? getNodeAttrStringValue(toNode, targetNodeAttrKey) || '?'
           : '?';
       }
+
+      edgeLabel = this.sanitizeEdgeLabel(
+        edgeLabel,
+        charsInfo,
+        sanitizedLabelCache,
+      );
 
       // Trim the edge label.
       if (
@@ -457,7 +455,14 @@ export class WebglRendererEdgeTextsService {
     groupNodeId: string,
     ioType: 'input' | 'output',
     metadataKey: string,
+    cache: Map<string, string>,
   ): string {
+    const cacheKey = `${groupNodeId}|${ioType}|${metadataKey}`;
+    const cached = cache.get(cacheKey);
+    if (cached != null) {
+      return cached;
+    }
+
     const namespace = groupNodeId.replace('___group___', '');
     const attrs =
       this.webglRenderer.curModelGraph.groupNodeAttributes?.[namespace] || {};
@@ -473,12 +478,35 @@ export class WebglRendererEdgeTextsService {
       .map((key) => attrs[key])
       .filter((value) => value != null && value !== '');
 
-    if (values.length === 0) {
-      return '?';
-    }
+    let result = '?';
     if (values.length === 1) {
-      return values[0];
+      result = values[0];
+    } else if (values.length > 1) {
+      result = values.join(' | ');
     }
-    return values.join(' | ');
+    cache.set(cacheKey, result);
+    return result;
+  }
+
+  private sanitizeEdgeLabel(
+    label: string,
+    charsInfo: Record<string, {width: number}>,
+    cache: Map<string, string>,
+  ): string {
+    const cached = cache.get(label);
+    if (cached != null) {
+      return cached;
+    }
+    const sanitized = label
+      .split('')
+      .map((char) => {
+        if (char === '∗') {
+          char = '*';
+        }
+        return charsInfo[char] == null ? '?' : char;
+      })
+      .join('');
+    cache.set(label, sanitized);
+    return sanitized;
   }
 }

@@ -404,10 +404,12 @@ export class WebglRenderer implements OnInit, OnChanges, OnDestroy {
         if (this.rendererId === workerEvent.rendererId) {
           this.handleExpandOrCollapseGroupNodeDone(
             workerEvent.modelGraph,
+            workerEvent.modelGraphBuffer,
             workerEvent.rendererId,
             workerEvent.groupNodeId,
             workerEvent.expanded,
             workerEvent.deepestExpandedGroupNodeIds,
+            workerEvent.workerDurationMs,
           );
         }
         break;
@@ -455,6 +457,9 @@ export class WebglRenderer implements OnInit, OnChanges, OnDestroy {
   };
 
   private firstThemeUpdate = true;
+  private lastExpandCollapseReqStartTs?: number;
+  private lastExpandCollapseReqLabel = '';
+  private lastRenderGraphPerfSummary = '';
 
   constructor(
     readonly changeDetectorRef: ChangeDetectorRef,
@@ -1993,14 +1998,26 @@ export class WebglRenderer implements OnInit, OnChanges, OnDestroy {
   }
 
   private handleExpandOrCollapseGroupNodeDone(
-    modelGraph: ModelGraph,
+    modelGraph: ModelGraph | undefined,
+    modelGraphBuffer: ArrayBuffer | undefined,
     rendererId: string,
     groupNodeId: string | undefined,
     expanded: boolean,
     deepestExpandedGroupNodeIds: string[],
+    workerDurationMs?: number,
   ) {
-    this.updateCurModelGraph(modelGraph);
+    const perfStart = performance.now();
+    if (modelGraph) {
+      this.updateCurModelGraph(modelGraph);
+    } else if (modelGraphBuffer) {
+      const decoded = new TextDecoder().decode(new Uint8Array(modelGraphBuffer));
+      this.updateCurModelGraph(JSON.parse(decoded) as ModelGraph);
+    } else {
+      return;
+    }
+    const tAfterUpdateGraph = performance.now();
     this.updateNodesAndEdgesToRender();
+    const tAfterCollectElements = performance.now();
 
     // Deselect node if it is not rendered.
     //
@@ -2015,22 +2032,29 @@ export class WebglRenderer implements OnInit, OnChanges, OnDestroy {
     }
 
     this.renderGraph();
+    const tAfterRenderGraph = performance.now();
     if (groupNodeId != null) {
       this.webglRendererThreejsService.zoomFitOnNode(
         groupNodeId,
-        modelGraph,
+        this.curModelGraph,
         ZOOM_FIT_ON_NODE_DURATION,
       );
     } else {
       this.webglRendererThreejsService.zoomFitGraph();
     }
+    const tAfterZoomFit = performance.now();
     // This has to be placed before updateNodesStyles because it calculates data
     // needed to update nodes styles correctly.
     this.webglRendererIoHighlightService.updateIncomingAndOutgoingHighlights();
+    const tAfterIoHighlight = performance.now();
     this.webglRendererIdenticalLayerService.updateIdenticalLayerIndicators();
+    const tAfterIdentical = performance.now();
     this.updateNodesStyles();
+    const tAfterNodeStyles = performance.now();
     this.renderDiffHighlights();
+    const tAfterDiff = performance.now();
     this.webglRendererThreejsService.render();
+    const tAfterRender = performance.now();
 
     if (!this.inPopup) {
       this.uiStateService.setDeepestExpandedGroupNodeIds(
@@ -2038,6 +2062,22 @@ export class WebglRenderer implements OnInit, OnChanges, OnDestroy {
         this.appService.getPaneIndexById(this.paneId),
       );
     }
+
+    const reqLatencyMs =
+      this.lastExpandCollapseReqStartTs == null
+        ? -1
+        : performance.now() - this.lastExpandCollapseReqStartTs;
+    const renderTotalMs = tAfterRender - perfStart;
+    const workerMs = workerDurationMs ?? -1;
+    const queueAndTransferMs =
+      reqLatencyMs < 0 || workerMs < 0
+        ? -1
+        : Math.max(0, reqLatencyMs - workerMs - renderTotalMs);
+    console.log(
+      `[ME-PERF][render-expand] ${this.lastExpandCollapseReqLabel} updateGraph=${(tAfterUpdateGraph - perfStart).toFixed(1)}ms collect=${(tAfterCollectElements - tAfterUpdateGraph).toFixed(1)}ms renderGraph=${(tAfterRenderGraph - tAfterCollectElements).toFixed(1)}ms zoomFit=${(tAfterZoomFit - tAfterRenderGraph).toFixed(1)}ms ioHighlight=${(tAfterIoHighlight - tAfterZoomFit).toFixed(1)}ms identical=${(tAfterIdentical - tAfterIoHighlight).toFixed(1)}ms nodeStyles=${(tAfterNodeStyles - tAfterIdentical).toFixed(1)}ms diff=${(tAfterDiff - tAfterNodeStyles).toFixed(1)}ms finalRender=${(tAfterRender - tAfterDiff).toFixed(1)}ms total=${renderTotalMs.toFixed(1)}ms worker=${workerMs.toFixed(1)}ms queue+transfer=${queueAndTransferMs.toFixed(1)}ms reqLatency=${reqLatencyMs.toFixed(1)}ms renderBreakdown={${this.lastRenderGraphPerfSummary}}`,
+    );
+    this.lastExpandCollapseReqStartTs = undefined;
+    this.lastExpandCollapseReqLabel = '';
   }
 
   private handleToggleExpandCollapse(
@@ -2206,6 +2246,10 @@ export class WebglRenderer implements OnInit, OnChanges, OnDestroy {
     all = false,
     expandOverride?: boolean,
   ) {
+    this.lastExpandCollapseReqStartTs = performance.now();
+    this.lastExpandCollapseReqLabel = `group="${node?.id || 'ROOT'}" expand=${
+      expandOverride == null ? !node?.expanded : expandOverride
+    } all=${all}`;
     this.showBusySpinnerWithDelay();
 
     const req: ExpandOrCollapseGroupNodeRequest = {
@@ -2232,6 +2276,8 @@ export class WebglRenderer implements OnInit, OnChanges, OnDestroy {
   }
 
   private renderGraph(options?: RenderGraphOptions) {
+    const perfStart = performance.now();
+    const perfEnabled = this.lastExpandCollapseReqStartTs != null;
     const useSvgTextRenderer =
       this.appService.config()?.svgTextRenderer === true &&
       !options?.forceDisableSvgTextRenderer;
@@ -2253,15 +2299,18 @@ export class WebglRenderer implements OnInit, OnChanges, OnDestroy {
       }
     }
     this.clearScene(extraMeshesToSkip);
+    const tAfterClear = performance.now();
 
     if (!options?.skipReRenderEdges) {
       this.renderEdges();
     }
+    const tAfterEdges = performance.now();
     if (useSvgTextRenderer) {
       this.renderSvgTexts();
     } else {
       this.renderTexts();
     }
+    const tAfterTexts = performance.now();
 
     const keys = getShowOnEdgeInputOutputMetadataKeys(this.curShowOnEdgeItem);
     if (!options?.skipReRenderEdgeTexts) {
@@ -2279,20 +2328,47 @@ export class WebglRenderer implements OnInit, OnChanges, OnDestroy {
         });
       }
     }
+    const tAfterEdgeTexts = performance.now();
 
     if (!useSvgTextRenderer) {
       this.webglRendererAttrsTableService.renderAttrsTable();
     }
+    const tAfterAttrs = performance.now();
     this.renderNodes();
+    const tAfterNodes = performance.now();
     this.webglRendererNdpService.renderNodeDataProviderDistributionBars();
+    const tAfterNdp = performance.now();
     this.renderArtificialGroupBorders();
+    const tAfterBorders = performance.now();
     this.webglRendererSearchResultsService.renderSearchResults();
+    const tAfterSearch = performance.now();
     this.webglRendererSubgraphSelectionService.renderSubgraphSelectedNodeMarkers();
+    const tAfterSubgraph = performance.now();
     this.updateNodeBgColorWhenFar();
+    const tAfterBg = performance.now();
 
     this.animateIntoPositions((t) => {
       this.updateAnimatinProgress(t, options);
     });
+    const tAfterAnimate = performance.now();
+
+    if (perfEnabled) {
+      this.lastRenderGraphPerfSummary =
+        `clear=${(tAfterClear - perfStart).toFixed(1)}ms ` +
+        `edges=${(tAfterEdges - tAfterClear).toFixed(1)}ms ` +
+        `texts=${(tAfterTexts - tAfterEdges).toFixed(1)}ms ` +
+        `edgeTexts=${(tAfterEdgeTexts - tAfterTexts).toFixed(1)}ms ` +
+        `attrs=${(tAfterAttrs - tAfterEdgeTexts).toFixed(1)}ms ` +
+        `nodes=${(tAfterNodes - tAfterAttrs).toFixed(1)}ms ` +
+        `ndp=${(tAfterNdp - tAfterNodes).toFixed(1)}ms ` +
+        `borders=${(tAfterBorders - tAfterNdp).toFixed(1)}ms ` +
+        `search=${(tAfterSearch - tAfterBorders).toFixed(1)}ms ` +
+        `subgraph=${(tAfterSubgraph - tAfterSearch).toFixed(1)}ms ` +
+        `bg=${(tAfterBg - tAfterSubgraph).toFixed(1)}ms ` +
+        `animate=${(tAfterAnimate - tAfterBg).toFixed(1)}ms`;
+    } else {
+      this.lastRenderGraphPerfSummary = '';
+    }
   }
 
   renderAll(options?: RenderGraphOptions) {

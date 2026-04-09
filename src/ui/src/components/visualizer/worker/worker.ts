@@ -102,6 +102,7 @@ self.addEventListener('message', (event: Event) => {
       break;
     }
     case WorkerEventType.EXPAND_OR_COLLAPSE_GROUP_NODE_REQ: {
+      const workerStartTs = performance.now();
       const modelGraph = getCachedModelGraph(
         workerEvent.modelGraphId,
         workerEvent.rendererId,
@@ -129,15 +130,22 @@ self.addEventListener('message', (event: Event) => {
         );
       }
       cacheModelGraph(modelGraph, workerEvent.rendererId);
+
+      // Full graph transfer via transferable ArrayBuffer for lower queue/clone
+      // overhead compared to structured clone of a huge object.
+      const encoded = new TextEncoder().encode(JSON.stringify(modelGraph));
+      const modelGraphBuffer = encoded.buffer;
+
       const resp: ExpandOrCollapseGroupNodeResponse = {
         eventType: WorkerEventType.EXPAND_OR_COLLAPSE_GROUP_NODE_RESP,
-        modelGraph,
+        modelGraphBuffer,
         expanded: workerEvent.expand,
         groupNodeId: workerEvent.groupNodeId,
         rendererId: workerEvent.rendererId,
         deepestExpandedGroupNodeIds,
+        workerDurationMs: performance.now() - workerStartTs,
       };
-      postMessage(resp);
+      postMessage(resp, [modelGraphBuffer]);
       break;
     }
     case WorkerEventType.RELAYOUT_GRAPH_REQ: {
@@ -304,10 +312,8 @@ function handleExpandGroupNode(
 
   // Expane group node.
   if (groupNodeId != null) {
-    let deepestExpandedGroupNodeId: string[] | undefined = undefined;
     const groupNode = modelGraph.nodesById[groupNodeId];
     if (groupNode && isGroupNode(groupNode)) {
-      groupNode.expanded = true;
       // Recursively expand child group node if there is only one child.
       let curGroupNode = groupNode;
       while (true) {
@@ -315,7 +321,6 @@ function handleExpandGroupNode(
         if (childrenIds.length === 1) {
           const child = modelGraph.nodesById[childrenIds[0]];
           if (child && isGroupNode(child)) {
-            child.expanded = true;
             curGroupNode = child;
           } else {
             break;
@@ -324,20 +329,10 @@ function handleExpandGroupNode(
           break;
         }
       }
-      // Get the deepest expanded group nodes from the curGroupNode and we will
-      // be doing relayout from there.
-      const ids: string[] = [];
-      getDeepestExpandedGroupNodeIds(curGroupNode, modelGraph, ids);
-      deepestExpandedGroupNodeId = ids.length === 0 ? [curGroupNode.id] : ids;
-      // Clear layout data for all nodes under curGroupNode.
-      //
-      // This is necessary because the node overlay might have been changed so
-      // we need to re-calculate the node sizes.
-      for (const nodeId of curGroupNode.descendantsNodeIds || []) {
-        const node = modelGraph.nodesById[nodeId];
-        node.width = undefined;
-        node.height = undefined;
-      }
+
+      // Incremental relayout: only relayout the expanded node, its ancestors,
+      // and root layer, instead of rebuilding from all deepest expanded nodes.
+      expander.expandGroupNode(curGroupNode.id);
     }
     if (all) {
       for (const childNodeId of (groupNode as GroupNode).descendantsNodeIds ||
@@ -347,9 +342,8 @@ function handleExpandGroupNode(
           node.expanded = true;
         }
       }
-      deepestExpandedGroupNodeId = undefined;
+      expander.reLayoutGraph();
     }
-    expander.reLayoutGraph(deepestExpandedGroupNodeId);
 
     const ids: string[] = [];
     getDeepestExpandedGroupNodeIds(undefined, modelGraph, ids);

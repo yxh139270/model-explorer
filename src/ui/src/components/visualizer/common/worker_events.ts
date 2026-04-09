@@ -98,7 +98,10 @@ export declare interface ExpandOrCollapseGroupNodeRequest
 export declare interface ExpandOrCollapseGroupNodeResponse
   extends WorkerEventBase {
   eventType: WorkerEventType.EXPAND_OR_COLLAPSE_GROUP_NODE_RESP;
-  modelGraph: ModelGraph;
+  // Full graph object (fallback path).
+  modelGraph?: ModelGraph;
+  // Full graph as UTF-8 JSON buffer (preferred, transferable).
+  modelGraphBuffer?: ArrayBuffer;
   expanded: boolean;
   // undefined when expanding/collapsing from root.
   groupNodeId?: string;
@@ -106,6 +109,8 @@ export declare interface ExpandOrCollapseGroupNodeResponse
   // These are the deepest group nodes (in terms of level) that none of its
   // child group nodes is expanded.
   deepestExpandedGroupNodeIds: string[];
+  // Worker-side execution time in milliseconds for this request.
+  workerDurationMs?: number;
 }
 
 /**

@@ -137,6 +137,7 @@ export class GraphLayout {
 
   /** Lays out the model graph rooted from the given root node.  */
   layout(rootNodeId?: string): Rect {
+    const perfStart = performance.now();
     // Get the children nodes of the given root node.
     let rootNode: GroupNode | undefined = undefined;
     let nodes: ModelNode[] = [];
@@ -151,6 +152,7 @@ export class GraphLayout {
 
     // Init.
     this.configLayout(this.dagreGraph, rootNode);
+    const tAfterConfigLayout = performance.now();
 
     // Get layout graph.
     const layoutGraph = getLayoutGraph(
@@ -164,6 +166,7 @@ export class GraphLayout {
       false,
       this.config,
     );
+    const tAfterBuildLayoutGraph = performance.now();
 
     // Set nodes/edges to dagre.
     for (const id of Object.keys(layoutGraph.nodes)) {
@@ -181,9 +184,11 @@ export class GraphLayout {
         this.dagreGraph.setEdge(fromNodeId, toNodeId);
       }
     }
+    const tAfterSetDagreGraph = performance.now();
 
     // Run the layout algorithm.
     this.dagre.layout(this.dagreGraph);
+    const tAfterDagreLayout = performance.now();
 
     // Set the results back to the original model nodes and calculate the bound
     // that contains all the nodes.
@@ -273,6 +278,7 @@ export class GraphLayout {
         maxEdgeY = Math.max(maxEdgeY, point.y);
       }
     }
+    const tAfterBuildEdges = performance.now();
     this.modelGraph.edgesByGroupNodeIds[rootNodeId || ''] = edges;
 
     // Offset nodes to take into account of edges going out of the bound of all
@@ -366,6 +372,11 @@ export class GraphLayout {
         maxY += localOffsetY;
       }
     }
+
+    const tAfterFinalize = performance.now();
+    console.log(
+      `[ME-PERF][GraphLayout.layout] root="${rootNodeId || 'ROOT'}" nodes=${nodes.length} dagreNodes=${Object.keys(layoutGraph.nodes).length} dagreEdges=${dagreEdgeRefs.length} config=${(tAfterConfigLayout - perfStart).toFixed(1)}ms buildLayoutGraph=${(tAfterBuildLayoutGraph - tAfterConfigLayout).toFixed(1)}ms setDagre=${(tAfterSetDagreGraph - tAfterBuildLayoutGraph).toFixed(1)}ms dagre=${(tAfterDagreLayout - tAfterSetDagreGraph).toFixed(1)}ms buildEdges=${(tAfterBuildEdges - tAfterDagreLayout).toFixed(1)}ms finalize=${(tAfterFinalize - tAfterBuildEdges).toFixed(1)}ms total=${(tAfterFinalize - perfStart).toFixed(1)}ms`,
+    );
 
     return {
       x: minX,
@@ -706,6 +717,7 @@ export function getLayoutGraph(
   useFakeNodeSize = false,
   config?: VisualizerConfig,
 ): LayoutGraph {
+  const perfStart = performance.now();
   const layoutGraph: LayoutGraph = {
     nodes: {},
     incomingEdges: {},
@@ -713,6 +725,7 @@ export function getLayoutGraph(
   };
 
   // Create layout graph nodes.
+  const tBeforeNodes = performance.now();
   for (const node of nodes) {
     if (isOpNode(node) && node.hideInLayout) {
       continue;
@@ -748,8 +761,10 @@ export function getLayoutGraph(
     };
     layoutGraph.nodes[node.id] = dagreNode;
   }
+  const tAfterNodes = performance.now();
 
   // Set layout graph edges.
+  const tBeforeEdges = performance.now();
   const curLayoutGraphEdges =
     modelGraph.layoutGraphEdges[rootGroupNodeId] || {};
   for (const [fromNodeId, toNodeIds] of Object.entries(curLayoutGraphEdges)) {
@@ -772,6 +787,11 @@ export function getLayoutGraph(
       addLayoutGraphEdge(layoutGraph, fromNodeId, toNodeId);
     }
   }
+
+  const tAfterEdges = performance.now();
+  console.log(
+    `[ME-PERF][GraphLayout.getLayoutGraph] root="${rootGroupNodeId || 'ROOT'}" inputNodes=${nodes.length} layoutNodes=${Object.keys(layoutGraph.nodes).length} edgeSources=${Object.keys(layoutGraph.outgoingEdges).length} nodesStage=${(tAfterNodes - tBeforeNodes).toFixed(1)}ms edgesStage=${(tAfterEdges - tBeforeEdges).toFixed(1)}ms total=${(tAfterEdges - perfStart).toFixed(1)}ms`,
+  );
 
   return layoutGraph;
 }

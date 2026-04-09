@@ -64,6 +64,8 @@ export class GraphExpander {
 
   /** Expands the given group node to show its child nodes. */
   expandGroupNode(groupNodeId: string) {
+    const perfStart = performance.now();
+    const layoutDurations: number[] = [];
     const groupNode = this.modelGraph.nodesById[groupNodeId];
     if (groupNode && isGroupNode(groupNode)) {
       if (groupNode.expanded) {
@@ -85,6 +87,7 @@ export class GraphExpander {
       curGroupNode.expanded = true;
 
       // Layout children.
+      const layoutStart = performance.now();
       const layout = new GraphLayout(
         this.modelGraph,
         this.dagre,
@@ -95,6 +98,7 @@ export class GraphExpander {
         this.config,
       );
       const rect = layout.layout(curGroupNodeId);
+      layoutDurations.push(performance.now() - layoutStart);
       if (this.testMode) {
         this.dagreGraphs.push(layout.dagreGraph);
       }
@@ -110,6 +114,7 @@ export class GraphExpander {
     }
 
     // Layout the root level nodes.
+    const rootLayoutStart = performance.now();
     const layout = new GraphLayout(
       this.modelGraph,
       this.dagre,
@@ -120,6 +125,7 @@ export class GraphExpander {
       this.config,
     );
     layout.layout();
+    const rootLayoutDuration = performance.now() - rootLayoutStart;
     if (this.testMode) {
       this.dagreGraphs.push(layout.dagreGraph);
     }
@@ -131,6 +137,14 @@ export class GraphExpander {
         this.updateNodeOffset(node);
       }
     }
+    const nodeLayouts = layoutDurations.length;
+    const avgLayoutMs =
+      nodeLayouts === 0
+        ? 0
+        : layoutDurations.reduce((sum, cur) => sum + cur, 0) / nodeLayouts;
+    console.log(
+      `[ME-PERF][GraphExpander.expandGroupNode] group="${groupNodeId}" ancestorLayouts=${nodeLayouts} avgLayout=${avgLayoutMs.toFixed(1)}ms rootLayout=${rootLayoutDuration.toFixed(1)}ms total=${(performance.now() - perfStart).toFixed(1)}ms`,
+    );
   }
 
   /** Expands from the given deepest group nodes back to root. */
