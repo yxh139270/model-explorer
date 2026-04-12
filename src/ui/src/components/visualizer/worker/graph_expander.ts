@@ -34,7 +34,6 @@ import {
 } from '../common/utils';
 import {VisualizerConfig} from '../common/visualizer_config';
 
-import {Dagre, DagreGraphInstance} from './dagre_types';
 import {
   GraphLayout,
   LAYOUT_MARGIN_BOTTOM,
@@ -47,11 +46,10 @@ import {
  */
 export class GraphExpander {
   /** This is for testing purpose. */
-  readonly dagreGraphs: DagreGraphInstance[] = [];
+  readonly dagreGraphs: unknown[] = [];
 
   constructor(
     private readonly modelGraph: ModelGraph,
-    private readonly dagre: Dagre,
     private readonly showOnNodeItemTypes: Record<string, ShowOnNodeItemData>,
     private readonly nodeDataProviderRuns: Record<
       string,
@@ -90,7 +88,6 @@ export class GraphExpander {
       const layoutStart = performance.now();
       const layout = new GraphLayout(
         this.modelGraph,
-        this.dagre,
         this.showOnNodeItemTypes,
         this.nodeDataProviderRuns,
         this.selectedNodeDataProviderRunId,
@@ -100,7 +97,7 @@ export class GraphExpander {
       const rect = layout.layout(curGroupNodeId);
       layoutDurations.push(performance.now() - layoutStart);
       if (this.testMode) {
-        this.dagreGraphs.push(layout.dagreGraph);
+        this.dagreGraphs.push({});
       }
 
       // Grow size.
@@ -117,7 +114,6 @@ export class GraphExpander {
     const rootLayoutStart = performance.now();
     const layout = new GraphLayout(
       this.modelGraph,
-      this.dagre,
       this.showOnNodeItemTypes,
       this.nodeDataProviderRuns,
       this.selectedNodeDataProviderRunId,
@@ -127,7 +123,7 @@ export class GraphExpander {
     layout.layout();
     const rootLayoutDuration = performance.now() - rootLayoutStart;
     if (this.testMode) {
-      this.dagreGraphs.push(layout.dagreGraph);
+      this.dagreGraphs.push({});
     }
 
     // From root, update offsets of all nodes that have x, y set (meaning they
@@ -183,7 +179,6 @@ export class GraphExpander {
       // Layout children.
       const layout = new GraphLayout(
         this.modelGraph,
-        this.dagre,
         this.showOnNodeItemTypes,
         this.nodeDataProviderRuns,
         this.selectedNodeDataProviderRunId,
@@ -192,7 +187,7 @@ export class GraphExpander {
       );
       const rect = layout.layout(groupNodeId);
       if (this.testMode) {
-        this.dagreGraphs.push(layout.dagreGraph);
+        this.dagreGraphs.push({});
       }
 
       // Grow size.
@@ -205,7 +200,6 @@ export class GraphExpander {
     // Layout the root level nodes.
     const layout = new GraphLayout(
       this.modelGraph,
-      this.dagre,
       this.showOnNodeItemTypes,
       this.nodeDataProviderRuns,
       this.selectedNodeDataProviderRunId,
@@ -214,7 +208,7 @@ export class GraphExpander {
     );
     layout.layout();
     if (this.testMode) {
-      this.dagreGraphs.push(layout.dagreGraph);
+      this.dagreGraphs.push({});
     }
 
     // From root, update offsets of all nodes that have x, y set (meaning they
@@ -298,7 +292,6 @@ export class GraphExpander {
       // Layout.
       const layout = new GraphLayout(
         this.modelGraph,
-        this.dagre,
         this.showOnNodeItemTypes,
         this.nodeDataProviderRuns,
         this.selectedNodeDataProviderRunId,
@@ -307,7 +300,7 @@ export class GraphExpander {
       );
       const rect = layout.layout(curGroupNodeId);
       if (this.testMode) {
-        this.dagreGraphs.push(layout.dagreGraph);
+        this.dagreGraphs.push({});
       }
 
       // Shrink size.
@@ -323,7 +316,6 @@ export class GraphExpander {
     // Layout the root level nodes.
     const layout = new GraphLayout(
       this.modelGraph,
-      this.dagre,
       this.showOnNodeItemTypes,
       this.nodeDataProviderRuns,
       this.selectedNodeDataProviderRunId,
@@ -332,7 +324,7 @@ export class GraphExpander {
     );
     layout.layout();
     if (this.testMode) {
-      this.dagreGraphs.push(layout.dagreGraph);
+      this.dagreGraphs.push({});
     }
 
     // From root, update offsets of all nodes that have x, y set (meaning they
@@ -385,7 +377,6 @@ export class GraphExpander {
     } else {
       const layout = new GraphLayout(
         this.modelGraph,
-        this.dagre,
         this.showOnNodeItemTypes,
         this.nodeDataProviderRuns,
         this.selectedNodeDataProviderRunId,
@@ -426,7 +417,6 @@ export class GraphExpander {
     // Layout the root level nodes.
     const layout = new GraphLayout(
       this.modelGraph,
-      this.dagre,
       this.showOnNodeItemTypes,
       this.nodeDataProviderRuns,
       this.selectedNodeDataProviderRunId,

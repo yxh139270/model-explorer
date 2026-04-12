@@ -38,16 +38,11 @@ import {
   WorkerEventType,
 } from '../common/worker_events';
 
-import {Dagre} from './dagre_types';
 import {GraphExpander} from './graph_expander';
 import {GraphLayout} from './graph_layout';
 import {GraphProcessor} from './graph_processor';
 import {IdenticalGroupsFinder} from './identical_groups_finder';
 import {updateProcessingProgress} from './utils';
-
-import '../../../../public/static_files/worker_deps.js';
-
-declare var dagre: Dagre;
 
 // <rendererId + ModelGraphId> -> ModelGraph
 let MODEL_GRAPHS_CACHE: Record<string, ModelGraph> = {};
@@ -265,7 +260,6 @@ function handleProcessGraph(
   if (!error && initialLayout) {
     const layout = new GraphLayout(
       modelGraph,
-      dagre,
       showItemOnNodeTypes,
       nodeDataProviderRuns,
       undefined,
@@ -302,7 +296,6 @@ function handleExpandGroupNode(
 ): string[] {
   const expander = new GraphExpander(
     modelGraph,
-    dagre,
     showOnNodeItemTypes,
     nodeDataProviderRuns,
     selectedNodeDataProviderRunId,
@@ -366,7 +359,6 @@ function handleCollapseGroupNode(
 ): string[] {
   const expander = new GraphExpander(
     modelGraph,
-    dagre,
     showOnNodeItemTypes,
     nodeDataProviderRuns,
     selectedNodeDataProviderRunId,
@@ -404,7 +396,6 @@ function handleReLayoutGraph(
 ) {
   const expander = new GraphExpander(
     modelGraph,
-    dagre,
     showOnNodeItemTypes,
     nodeDataProviderRuns,
     selectedNodeDataProviderRunId,
@@ -427,7 +418,6 @@ function handleLocateNode(
 ): string[] {
   const expander = new GraphExpander(
     modelGraph,
-    dagre,
     showOnNodeItemTypes,
     nodeDataProviderRuns,
     selectedNodeDataProviderRunId,

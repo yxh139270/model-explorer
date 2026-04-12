@@ -74,7 +74,12 @@ import {
 } from '../common/utils';
 import {VisualizerConfig} from '../common/visualizer_config';
 
-import {Dagre, DagreGraphInstance} from './dagre_types';
+import {
+  graph as createDagGraph,
+  sugiyama,
+  type MutGraph,
+  type MutGraphNode,
+} from 'd3-dag';
 
 /** Node height for test cases. */
 export const NODE_HEIGHT_FOR_TEST = 26;
@@ -89,8 +94,8 @@ const MIN_NODE_WIDTH = 80;
 
 const ATTRS_TABLE_MARGIN_X = 8;
 
-/** A node in dagre. */
-export declare interface DagreNode {
+/** A layout node used by d3-dag. */
+export declare interface LayoutNode {
   id: string;
   width: number;
   height: number;
@@ -100,7 +105,7 @@ export declare interface DagreNode {
 }
 
 interface LayoutGraph {
-  nodes: {[id: string]: DagreNode};
+  nodes: {[id: string]: LayoutNode};
   incomingEdges: {[fromId: string]: string[]};
   outgoingEdges: {[fromId: string]: string[]};
 }
@@ -111,14 +116,11 @@ interface LayoutGraph {
  * TODO: distribute this task to multiple workers to improvement performance.
  */
 export class GraphLayout {
-  dagreGraph!: DagreGraphInstance;
-
   private attrsTableRowHeight: number;
   private attrsTableFontSize: number;
 
   constructor(
     private readonly modelGraph: ModelGraph,
-    private readonly dagre: Dagre,
     private readonly showOnNodeItemTypes: Record<string, ShowOnNodeItemData>,
     private readonly nodeDataProviderRuns: Record<
       string,
@@ -128,7 +130,6 @@ export class GraphLayout {
     private readonly testMode = false,
     private readonly config?: VisualizerConfig,
   ) {
-    this.dagreGraph = new this.dagre.graphlib.Graph();
     this.attrsTableFontSize =
       config?.nodeAttrsTableFontSize ?? DEFAULT_NODE_ATTRS_TABLE_FONT_SIZE;
     this.attrsTableRowHeight =
@@ -151,7 +152,8 @@ export class GraphLayout {
     }
 
     // Init.
-    this.configLayout(this.dagreGraph, rootNode);
+    const layoutDirection = getLayoutDirection(this.modelGraph, rootNodeId ?? '');
+    const layoutConfig = this.getLayoutConfig(rootNode);
     const tAfterConfigLayout = performance.now();
 
     // Get layout graph.
@@ -168,27 +170,72 @@ export class GraphLayout {
     );
     const tAfterBuildLayoutGraph = performance.now();
 
-    // Set nodes/edges to dagre.
+    // Build graph for d3-dag.
+    const dagGraph: MutGraph<string, undefined> = createDagGraph();
+    const dagNodesById: Record<string, MutGraphNode<string, undefined>> = {};
     for (const id of Object.keys(layoutGraph.nodes)) {
-      const dagreNode = layoutGraph.nodes[id];
+      const dagNode = layoutGraph.nodes[id];
       if (
-        dagreNode.config?.pinToGroupTop ||
-        dagreNode.config?.pinToGroupBottom
+        dagNode.config?.pinToGroupTop ||
+        dagNode.config?.pinToGroupBottom
       ) {
         continue;
       }
-      this.dagreGraph.setNode(id, dagreNode);
+      dagNodesById[id] = dagGraph.node(id);
     }
     for (const fromNodeId of Object.keys(layoutGraph.outgoingEdges)) {
       for (const toNodeId of layoutGraph.outgoingEdges[fromNodeId]) {
-        this.dagreGraph.setEdge(fromNodeId, toNodeId);
+        const from = dagNodesById[fromNodeId];
+        const to = dagNodesById[toNodeId];
+        if (!from || !to) {
+          continue;
+        }
+        dagGraph.link(from, to);
       }
     }
-    const tAfterSetDagreGraph = performance.now();
+    const tAfterBuildDagGraph = performance.now();
 
     // Run the layout algorithm.
-    this.dagre.layout(this.dagreGraph);
-    const tAfterDagreLayout = performance.now();
+    const dagLayout = sugiyama()
+      .nodeSize((node) => {
+        const dagNode = layoutGraph.nodes[node.data];
+        if (!dagNode) {
+          return [MIN_NODE_WIDTH, NODE_HEIGHT_FOR_TEST] as const;
+        }
+        return [dagNode.width, dagNode.height] as const;
+      })
+      .gap([layoutConfig.nodesep, layoutConfig.ranksep]);
+    dagLayout(dagGraph as any);
+    const tAfterDagLayout = performance.now();
+
+    const edgeRefs: Array<{fromNodeId: string; toNodeId: string; points: Point[]}> =
+      [];
+    for (const dagNode of dagGraph.nodes()) {
+      const layoutNode = layoutGraph.nodes[dagNode.data];
+      if (!layoutNode) {
+        continue;
+      }
+      layoutNode.x =
+        (layoutDirection === LayoutDirection.TOP_BOTTOM ? dagNode.x : dagNode.y) +
+        layoutConfig.marginx;
+      layoutNode.y =
+        (layoutDirection === LayoutDirection.TOP_BOTTOM ? dagNode.y : dagNode.x) +
+        layoutConfig.marginy;
+    }
+    for (const link of dagGraph.links()) {
+      edgeRefs.push({
+        fromNodeId: link.source.data,
+        toNodeId: link.target.data,
+        points: (link.points || []).map(([x, y]) => ({
+          x:
+            (layoutDirection === LayoutDirection.TOP_BOTTOM ? x : y) +
+            layoutConfig.marginx,
+          y:
+            (layoutDirection === LayoutDirection.TOP_BOTTOM ? y : x) +
+            layoutConfig.marginy,
+        })),
+      });
+    }
 
     // Set the results back to the original model nodes and calculate the bound
     // that contains all the nodes.
@@ -197,23 +244,23 @@ export class GraphLayout {
     let maxX = Number.NEGATIVE_INFINITY;
     let maxY = Number.NEGATIVE_INFINITY;
     for (const node of nodes) {
-      const dagreNode = layoutGraph.nodes[node.id];
-      if (!dagreNode) {
-        console.warn(`Node "${node.id}" is not in the dagre layout result`);
+      const layoutNode = layoutGraph.nodes[node.id];
+      if (!layoutNode) {
+        console.warn(`Node "${node.id}" is not in the d3-dag layout result`);
         continue;
       }
-      node.x = (dagreNode.x || 0) - dagreNode.width / 2;
-      node.y = (dagreNode.y || 0) - dagreNode.height / 2;
-      node.width = dagreNode.width;
-      node.height = dagreNode.height;
+      node.x = (layoutNode.x || 0) - layoutNode.width / 2;
+      node.y = (layoutNode.y || 0) - layoutNode.height / 2;
+      node.width = layoutNode.width;
+      node.height = layoutNode.height;
       node.localOffsetX = 0;
       node.localOffsetY = 0;
 
       // Don't consider the bound of the node if it's pinned to the top or bottom
       // of the group.
       if (
-        !dagreNode.config?.pinToGroupTop &&
-        !dagreNode.config?.pinToGroupBottom
+        !layoutNode.config?.pinToGroupTop &&
+        !layoutNode.config?.pinToGroupBottom
       ) {
         minX = Math.min(minX, node.x);
         minY = Math.min(minY, node.y);
@@ -227,14 +274,10 @@ export class GraphLayout {
     let minEdgeY = Number.MAX_VALUE;
     let maxEdgeX = Number.NEGATIVE_INFINITY;
     let maxEdgeY = Number.NEGATIVE_INFINITY;
-    const dagreEdgeRefs = this.dagreGraph.edges();
+    const dagEdgeRefs = edgeRefs;
     const edges: ModelEdge[] = [];
-    const layoutDirection = getLayoutDirection(
-      this.modelGraph,
-      rootNodeId ?? '',
-    );
-    for (const dagreEdge of dagreEdgeRefs) {
-      const points = this.dagreGraph.edge(dagreEdge).points as Point[];
+    for (const dagEdge of dagEdgeRefs) {
+      const points = dagEdge.points;
       // tslint:disable-next-line:no-any Allow arbitrary types.
       const d3 = (globalThis as any)['d3'];
       // tslint:disable-next-line:no-any Allow arbitrary types.
@@ -253,14 +296,14 @@ export class GraphLayout {
               three,
               layoutDirection === LayoutDirection.TOP_BOTTOM,
             );
-      const fromNode = this.modelGraph.nodesById[dagreEdge.v];
-      const toNode = this.modelGraph.nodesById[dagreEdge.w];
+      const fromNode = this.modelGraph.nodesById[dagEdge.fromNodeId];
+      const toNode = this.modelGraph.nodesById[dagEdge.toNodeId];
       if (fromNode == null) {
-        console.warn(`Edge from node not found: "${dagreEdge.v}"`);
+        console.warn(`Edge from node not found: "${dagEdge.fromNodeId}"`);
         continue;
       }
       if (toNode == null) {
-        console.warn(`Edge to node not found: "${dagreEdge.w}"`);
+        console.warn(`Edge to node not found: "${dagEdge.toNodeId}"`);
         continue;
       }
       const edgeId = `${fromNode.id}|${toNode.id}`;
@@ -375,7 +418,7 @@ export class GraphLayout {
 
     const tAfterFinalize = performance.now();
     console.log(
-      `[ME-PERF][GraphLayout.layout] root="${rootNodeId || 'ROOT'}" nodes=${nodes.length} dagreNodes=${Object.keys(layoutGraph.nodes).length} dagreEdges=${dagreEdgeRefs.length} config=${(tAfterConfigLayout - perfStart).toFixed(1)}ms buildLayoutGraph=${(tAfterBuildLayoutGraph - tAfterConfigLayout).toFixed(1)}ms setDagre=${(tAfterSetDagreGraph - tAfterBuildLayoutGraph).toFixed(1)}ms dagre=${(tAfterDagreLayout - tAfterSetDagreGraph).toFixed(1)}ms buildEdges=${(tAfterBuildEdges - tAfterDagreLayout).toFixed(1)}ms finalize=${(tAfterFinalize - tAfterBuildEdges).toFixed(1)}ms total=${(tAfterFinalize - perfStart).toFixed(1)}ms`,
+      `[ME-PERF][GraphLayout.layout] root="${rootNodeId || 'ROOT'}" nodes=${nodes.length} layoutNodes=${Object.keys(layoutGraph.nodes).length} layoutEdges=${dagEdgeRefs.length} config=${(tAfterConfigLayout - perfStart).toFixed(1)}ms buildLayoutGraph=${(tAfterBuildLayoutGraph - tAfterConfigLayout).toFixed(1)}ms buildDag=${(tAfterBuildDagGraph - tAfterBuildLayoutGraph).toFixed(1)}ms layout=${(tAfterDagLayout - tAfterBuildDagGraph).toFixed(1)}ms buildEdges=${(tAfterBuildEdges - tAfterDagLayout).toFixed(1)}ms finalize=${(tAfterFinalize - tAfterBuildEdges).toFixed(1)}ms total=${(tAfterFinalize - perfStart).toFixed(1)}ms`,
     );
 
     return {
@@ -386,35 +429,20 @@ export class GraphLayout {
     };
   }
 
-  private configLayout(dagreGraph: DagreGraphInstance, rootNode?: GroupNode) {
-    const layoutDirection = getLayoutDirection(
-      this.modelGraph,
-      rootNode?.id ?? '',
-    );
-    let rankdir = '';
-    switch (layoutDirection) {
-      case LayoutDirection.TOP_BOTTOM:
-        rankdir = 'TB';
-        break;
-      case LayoutDirection.LEFT_RIGHT:
-        rankdir = 'LR';
-        break;
-      default:
-        rankdir = 'TB';
-    }
-
-    // See available configs here:
-    // https://github.com/dagrejs/dagre/wiki#configuring-the-layout.
-    dagreGraph.setGraph({
-      rankdir,
+  private getLayoutConfig(rootNode?: GroupNode): {
+    nodesep: number;
+    ranksep: number;
+    edgesep: number;
+    marginx: number;
+    marginy: number;
+  } {
+    return {
       nodesep: this.modelGraph.layoutConfigs?.nodeSep ?? 20,
       ranksep: this.modelGraph.layoutConfigs?.rankSep ?? 50,
       edgesep: this.modelGraph.layoutConfigs?.edgeSep ?? 20,
       marginx: LAYOUT_MARGIN_X,
       marginy: rootNode ? getLayoutMarginTop(rootNode, this.config) : 36,
-    });
-    // No edge labels.
-    dagreGraph.setDefaultEdgeLabel(() => ({}));
+    };
   }
 }
 
@@ -730,7 +758,7 @@ export function getLayoutGraph(
     if (isOpNode(node) && node.hideInLayout) {
       continue;
     }
-    const dagreNode: DagreNode = {
+    const dagNode: LayoutNode = {
       id: node.id,
       width:
         node.width ||
@@ -759,7 +787,7 @@ export function getLayoutGraph(
           ),
       config: isOpNode(node) ? node.config : undefined,
     };
-    layoutGraph.nodes[node.id] = dagreNode;
+    layoutGraph.nodes[node.id] = dagNode;
   }
   const tAfterNodes = performance.now();
 
